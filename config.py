@@ -11,6 +11,7 @@ load_dotenv()
 # ─── Telegram ────────────────────────────────────────────────
 TELEGRAM_TOKEN      = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")   # channel for public alerts
+TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHANNEL_ID")
 
 # Admin IDs — only these 2 users can command the bot
 ADMIN_IDS = set(filter(None, [

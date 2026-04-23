@@ -5,6 +5,7 @@ Uses Claude (Anthropic) for unique, high-quality content ideas
 Completely separate from market/signal engine
 """
 
+import os
 import random
 import json
 import requests
