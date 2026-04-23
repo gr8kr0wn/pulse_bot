@@ -15,25 +15,20 @@ def format_market_signal(signal: dict) -> str:
     sym  = signal["symbol"]
     url  = signal.get("dex_url", "")
 
-    # Bullish/bearish bar
     bull = p["bullish"]
     bear = p["bearish"]
     bar  = "🟩" * (bull // 20) + "🟥" * (bear // 20)
 
-    # Price change formatting
-    pc1h = p["price_change_1h"]
+    pc1h     = p["price_change_1h"]
     pc_emoji = "🟢" if pc1h >= 0 else "🔴"
     pc_str   = f"+{pc1h:.1f}%" if pc1h >= 0 else f"{pc1h:.1f}%"
 
-    # Volume formatting
-    vol = p["volume_1h"]
+    vol     = p["volume_1h"]
     vol_str = f"${vol:,.0f}" if vol < 1_000_000 else f"${vol/1_000_000:.1f}M"
 
-    # Liquidity formatting
-    liq = p["liquidity_usd"]
+    liq     = p["liquidity_usd"]
     liq_str = f"${liq:,.0f}" if liq < 1_000_000 else f"${liq/1_000_000:.1f}M"
 
-    # Reasons
     reason_lines = "\n".join([f"  • {r}" for r in p["reasons"][:3]]) if p["reasons"] else "  • No strong signals"
 
     msg = (
@@ -62,14 +57,16 @@ def format_content_alert(idea: dict) -> str:
     Format a content idea into a Telegram message.
     🎨 CONTENT PULSE — animation ideas only, no trading signals
     """
-    topic    = idea["topic"]
-    status   = idea["status"]
-    category = idea["category"].upper()
-    ideas    = idea["ideas"]
-    hashtags = " ".join(idea["hashtags"][:5])
-    ts       = idea.get("timestamp", "")
+    topic      = idea["topic"]
+    status     = idea["status"]
+    category   = idea["category"].upper()
+    ideas      = idea["ideas"]
+    hashtags   = " ".join(idea["hashtags"][:5])
+    ts         = idea.get("timestamp", "")
+    ai_powered = idea.get("ai_powered", False)
 
-    # Build platform sections
+    ai_badge = "🤖 _AI\\-Generated Ideas_\n" if ai_powered else ""
+
     platform_sections = ""
     for platform, platform_ideas in ideas.items():
         emoji = {"YouTube": "▶️", "TikTok": "🎵", "X (Twitter)": "𝕏"}.get(platform, "📱")
@@ -84,6 +81,7 @@ def format_content_alert(idea: dict) -> str:
         f"📂 Category: `{category}`\n"
         f"📡 Status: {status}\n"
         f"🕐 {ts}\n"
+        f"{ai_badge}"
         f"\n🎬 *Animation Ideas:*"
         f"{platform_sections}\n"
         f"#️⃣ *Hashtags:*\n{escape_md(hashtags)}"
@@ -102,7 +100,7 @@ def format_new_tokens(tokens: list[dict]) -> str:
         url  = t.get("url", "")
         addr = t.get("address", "")[:8] + "..." if t.get("address") else "N/A"
 
-        line = f"\n*{i}.* {name}\n"
+        line  = f"\n*{i}.* {name}\n"
         line += f"   `{addr}`\n"
         if url:
             line += f"   [View on DexScreener]({url})\n"
@@ -113,10 +111,7 @@ def format_new_tokens(tokens: list[dict]) -> str:
 
 
 def format_signal_summary(signals: list[dict]) -> str:
-    """
-    Lightweight summary notification for auto signal checks.
-    Lists what was found — user taps /signals for full details.
-    """
+    """Lightweight summary for auto signal checks posted to channel."""
     count = len(signals)
     lines = [
         "📈 *MARKET PULSE*",
@@ -125,22 +120,19 @@ def format_signal_summary(signals: list[dict]) -> str:
     ]
 
     for signal in signals[:5]:
-        sym  = escape_md(signal["symbol"])
-        pc   = signal["probability"]["price_change_1h"]
-        arrow = "🟢" if pc >= 0 else "🔴"
+        sym    = escape_md(signal["symbol"])
+        pc     = signal["probability"]["price_change_1h"]
+        arrow  = "🟢" if pc >= 0 else "🔴"
         pc_str = f"\\+{pc:.1f}%" if pc >= 0 else f"{pc:.1f}%"
         lines.append(f"• `${sym}` — {pc_str} {arrow}")
 
     lines.append("")
-    lines.append("_Tap /signals for the full breakdown_")
+    lines.append("_Use /signals for the full breakdown_")
     return "\n".join(lines)
 
 
 def format_trend_summary(ideas: list[dict]) -> str:
-    """
-    Lightweight summary notification for auto trend checks.
-    Lists what was found — user taps /trending for full ideas.
-    """
+    """Lightweight summary for auto trend checks posted to channel."""
     count = len(ideas)
     lines = [
         "🎨 *CONTENT PULSE*",
@@ -151,14 +143,49 @@ def format_trend_summary(ideas: list[dict]) -> str:
     for idea in ideas[:5]:
         topic  = escape_md(idea["topic"])
         status = idea["status"]
-        lines.append(f"• {topic} — {status}")
+        ai_tag = " 🤖" if idea.get("ai_powered") else ""
+        lines.append(f"• {topic} — {status}{ai_tag}")
 
     lines.append("")
-    lines.append("_Tap /trending to see the full animation ideas_")
+    lines.append("_Use /trending to see the full animation ideas_")
     return "\n".join(lines)
 
 
+def format_signal_history(history: list[dict]) -> str:
+    """Format signal history for /history command."""
+    if not history:
+        return (
+            "📋 *SIGNAL HISTORY*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "😴 No signals recorded yet\\."
+        )
 
+    lines = [
+        "📋 *SIGNAL HISTORY — LAST 10*",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    for i, s in enumerate(history, 1):
+        sym      = escape_md(s.get("symbol", "???"))
+        name     = escape_md(s.get("name", "Unknown"))
+        bull     = s.get("bullish", 50)
+        pc       = s.get("price_change_1h", 0)
+        arrow    = "🟢" if pc >= 0 else "🔴"
+        pc_str   = escape_md(f"+{pc:.1f}%" if pc >= 0 else f"{pc:.1f}%")
+        ts_raw   = s.get("timestamp", "")[:16].replace("T", " ")
+        ts       = escape_md(ts_raw)
+
+        lines.append(
+            f"\n*{i}\\.* `${sym}` — {name}\n"
+            f"   {arrow} {pc_str}  •  Bullish: *{bull}%*\n"
+            f"   🕐 _{ts} UTC_"
+        )
+
+    lines.append("\n⚠️ _Historical signals — not financial advice_")
+    return "\n".join(lines)
+
+
+def format_no_signals() -> str:
     return (
         "📈 *MARKET PULSE*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
