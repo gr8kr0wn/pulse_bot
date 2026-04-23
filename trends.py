@@ -1,10 +1,12 @@
 """
 trends.py — PULSE Content Intelligence
-Trend detection + animation content idea generator
+Trend detection + AI-powered animation content idea generator
+Uses Claude (Anthropic) for unique, high-quality content ideas
 Completely separate from market/signal engine
 """
 
 import random
+import json
 import requests
 from datetime import datetime
 
@@ -16,7 +18,8 @@ except ImportError:
 
 from config import (
     CRYPTO_KEYWORDS, LIFESTYLE_KEYWORDS,
-    ANIMATION_KEYWORDS, GENERAL_TRENDING, PLATFORMS
+    ANIMATION_KEYWORDS, GENERAL_TRENDING,
+    PLATFORMS, ANTHROPIC_API_KEY
 )
 
 
@@ -52,7 +55,7 @@ def get_google_trends(keywords: list[str]) -> list[dict]:
 def get_dexscreener_trending_names() -> list[str]:
     """
     Pull trending Solana token names to use as content seeds.
-    This feeds the CONTENT engine (not trading signals).
+    This feeds the CONTENT engine only — not trading signals.
     """
     try:
         url = "https://api.dexscreener.com/token-boosts/top/v1"
@@ -64,16 +67,90 @@ def get_dexscreener_trending_names() -> list[str]:
             if item.get("chainId", "").lower() == "solana":
                 desc = item.get("description", "")
                 if desc:
-                    names.append(desc.split()[0])  # first word / token name
+                    names.append(desc.split()[0])
         return names[:5]
     except Exception as e:
         print(f"[trends] DexScreener name fetch error: {e}")
         return []
 
+# ─── AI-Powered Idea Generator (Gemini) ──────────────────────
 
-# ─── Content Idea Generator ──────────────────────────────────
+def generate_ai_content_ideas(topic: str, category: str = "general") -> dict | None:
+    """
+    Use Google Gemini to generate unique animation content ideas.
+    Reads the API key from the ANTHROPIC_API_KEY env variable.
+    Falls back to templates if the key is missing or the call fails.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
 
-# Animation-specific idea templates per category
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+    except ImportError:
+        print("[trends] google-generativeai not installed — falling back to templates")
+        return None
+
+    prompt = f"""You are a creative director for an animation studio that makes short-form content for YouTube, TikTok, and X (Twitter).
+
+Generate 2 unique, specific, and engaging animation video ideas for each platform about this topic: "{topic}"
+Category: {category}
+
+Rules:
+- Ideas must be animation-specific (not generic video ideas)
+- Each idea should have a hook, a clear concept, and feel fresh
+- TikTok ideas: short, punchy, under 60 seconds
+- YouTube ideas: longer concept, story-driven or educational
+- X (Twitter): a meme angle, loop, or animated reaction post
+- Be creative and specific — avoid generic titles
+
+Respond ONLY with a valid JSON object in this exact format, no extra text:
+{{
+  "YouTube": ["idea one", "idea two"],
+  "TikTok": ["idea one", "idea two"],
+  "X (Twitter)": ["idea one", "idea two"]
+}}"""
+
+    try:
+        model = genai.GenerativeModel(
+            "gemini-1.5-flash",
+            generation_config={"response_mime_type": "application/json"}
+        )
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        ideas = json.loads(raw.strip())
+
+        status_labels = ["Rising 📈", "Hot 🔥", "Viral Early Stage ⚡", "Trending Now 🌊"]
+        hashtag_sets  = {
+            "crypto":    ["#memecoin", "#Solana", "#crypto", "#SOL", "#animation", "#cryptoanimation"],
+            "lifestyle": ["#animatorlife", "#dayinmylife", "#contentcreator", "#animation", "#vlog"],
+            "meme":      ["#meme", "#animation", "#viral", "#animatedmeme", "#funny"],
+            "general":   ["#animation", "#trending", "#viral", "#contentcreator", "#animated"],
+        }
+
+        return {
+            "topic":      topic,
+            "category":   category,
+            "status":     random.choice(status_labels),
+            "ideas":      ideas,
+            "hashtags":   hashtag_sets.get(category, hashtag_sets["general"]),
+            "timestamp":  datetime.utcnow().strftime("%H:%M UTC"),
+            "ai_powered": True,
+        }
+
+    except Exception as e:
+        print(f"[trends] Gemini idea generation failed: {e}")
+        return None
+
+# ─── Template-based Fallback ─────────────────────────────────
+
 TEMPLATES = {
     "crypto": {
         "YouTube": [
@@ -134,7 +211,7 @@ TEMPLATES = {
     "general": {
         "YouTube": [
             "Animated explainer: why everyone is talking about {topic}",
-            "{topic} in 2024 — animated summary",
+            "{topic} in 2025 — animated summary",
             "The {topic} iceberg — animated deep dive",
         ],
         "TikTok": [
@@ -162,13 +239,18 @@ STATUS_LABELS = ["Rising 📈", "Hot 🔥", "Viral Early Stage ⚡", "Trending N
 
 def generate_content_ideas(topic: str, category: str = "general") -> dict:
     """
-    Generate animation content ideas for a given topic and category.
-    Returns structured ideas per platform.
+    Generate animation content ideas for a topic.
+    Tries AI first, falls back to templates if AI unavailable.
     """
-    category = category if category in TEMPLATES else "general"
+    # Try AI generation first
+    ai_result = generate_ai_content_ideas(topic, category)
+    if ai_result:
+        return ai_result
+
+    # Template fallback
+    category  = category if category in TEMPLATES else "general"
     templates = TEMPLATES[category]
     hashtags  = HASHTAG_SETS.get(category, HASHTAG_SETS["general"])
-    status    = random.choice(STATUS_LABELS)
 
     ideas = {}
     for platform in PLATFORMS:
@@ -177,12 +259,13 @@ def generate_content_ideas(topic: str, category: str = "general") -> dict:
         ideas[platform] = [t.format(topic=topic) for t in selected]
 
     return {
-        "topic":    topic,
-        "category": category,
-        "status":   status,
-        "ideas":    ideas,
-        "hashtags": hashtags,
-        "timestamp": datetime.utcnow().strftime("%H:%M UTC"),
+        "topic":      topic,
+        "category":   category,
+        "status":     random.choice(STATUS_LABELS),
+        "ideas":      ideas,
+        "hashtags":   hashtags,
+        "timestamp":  datetime.utcnow().strftime("%H:%M UTC"),
+        "ai_powered": False,
     }
 
 
@@ -214,13 +297,13 @@ def get_trending_content_ideas() -> list[dict]:
         idea["trend_score"] = trend["value"]
         results.append(idea)
 
-    # 4. Fallback — use preset keywords if Google Trends fails
+    # 4. Fallback — preset topics if Google Trends fails
     if not results:
         fallback_topics = [
-            ("AI replacing jobs",   "general"),
-            ("animator life",       "lifestyle"),
-            ("memecoin season",     "crypto"),
-            ("viral meme format",   "meme"),
+            ("AI replacing jobs",  "general"),
+            ("animator life",      "lifestyle"),
+            ("memecoin season",    "crypto"),
+            ("viral meme format",  "meme"),
         ]
         for topic, cat in fallback_topics[:2]:
             results.append(generate_content_ideas(topic, category=cat))
@@ -230,7 +313,6 @@ def get_trending_content_ideas() -> list[dict]:
 
 def get_ideas_for_topic(topic: str) -> dict:
     """Generate ideas for a specific user-requested topic."""
-    # Auto-detect category
     topic_lower = topic.lower()
     if any(k in topic_lower for k in ["coin", "token", "crypto", "sol", "pump", "degen"]):
         category = "crypto"
