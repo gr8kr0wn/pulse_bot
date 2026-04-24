@@ -3,4 +3,4 @@ requests==2.31.0
 pytrends==4.9.2
 python-dotenv==1.0.0
 apscheduler==3.10.4
-aiohttp==3.9.1
+aiohttp==3.10.11

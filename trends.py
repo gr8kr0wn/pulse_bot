@@ -20,7 +20,7 @@ except ImportError:
 from config import (
     CRYPTO_KEYWORDS, LIFESTYLE_KEYWORDS,
     ANIMATION_KEYWORDS, GENERAL_TRENDING,
-    PLATFORMS, ANTHROPIC_API_KEY
+    PLATFORMS, GEMINI_API_KEY
 )
 
 
@@ -82,7 +82,7 @@ def generate_ai_content_ideas(topic: str, category: str = "general") -> dict | N
     Reads the API key from the ANTHROPIC_API_KEY env variable.
     Falls back to templates if the key is missing or the call fails.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = GEMINI_API_KEY
     if not api_key:
         return None
 

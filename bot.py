@@ -32,9 +32,22 @@ logging.basicConfig(
 log = logging.getLogger("pulse_bot")
 
 
+# ─── Admin-only guard ──────────────────────────────────────
+from config import ADMIN_IDS
+
+async def admin_only(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Return True if user is admin, else silently ignore."""
+    user_id = str(update.effective_user.id)
+    if user_id not in ADMIN_IDS:
+        return False  # completely ignore — no reply, no reaction
+    return True
+
+
 # ─── Command Handlers ────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     msg = (
         "⚡ *Welcome to PULSE BOT*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -61,6 +74,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     now = datetime.utcnow().strftime("%Y\\-%m\\-%d %H:%M UTC")
     msg = (
         "⚙️ *PULSE BOT — STATUS*\n"
@@ -76,6 +91,8 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     await update.message.reply_text(
         "📈 *Scanning Solana for signals\\.\\.\\.*",
         parse_mode=ParseMode.MARKDOWN_V2
@@ -92,6 +109,8 @@ async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_trending(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     await update.message.reply_text(
         "🎨 *Scanning trends\\.\\.\\.*",
         parse_mode=ParseMode.MARKDOWN_V2
@@ -108,6 +127,8 @@ async def cmd_trending(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_ideas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     # Get topic from command args: /ideas memecoin
     topic = " ".join(ctx.args).strip() if ctx.args else ""
 
@@ -132,6 +153,8 @@ async def cmd_ideas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_newtokens(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     await update.message.reply_text(
         "🆕 *Fetching new Solana token launches\\.\\.\\.*",
         parse_mode=ParseMode.MARKDOWN_V2
@@ -142,6 +165,8 @@ async def cmd_newtokens(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await admin_only(update, ctx):
+        return
     await update.message.reply_text(
         "❓ Unknown command\\. Type /start to see all commands\\.",
         parse_mode=ParseMode.MARKDOWN_V2
@@ -160,11 +185,11 @@ async def auto_signal_check(app: Application):
     try:
         msg = format_signal_summary(signals)
         await app.bot.send_message(
-            chat_id=config.TELEGRAM_CHAT_ID,
+            chat_id=config.TELEGRAM_CHANNEL_ID,
             text=msg,
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        log.info(f"[scheduler] Signal summary sent — {len(signals)} signals.")
+        log.info(f"[scheduler] Signal summary sent to channel — {len(signals)} signals.")
     except Exception as e:
         log.error(f"[scheduler] Failed to send signal summary: {e}")
 
@@ -179,11 +204,11 @@ async def auto_trend_check(app: Application):
     try:
         msg = format_trend_summary(ideas)
         await app.bot.send_message(
-            chat_id=config.TELEGRAM_CHAT_ID,
+            chat_id=config.TELEGRAM_CHANNEL_ID,
             text=msg,
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        log.info(f"[scheduler] Trend summary sent — {len(ideas)} trends.")
+        log.info(f"[scheduler] Trend summary sent to channel — {len(ideas)} trends.")
     except Exception as e:
         log.error(f"[scheduler] Failed to send trend summary: {e}")
 
@@ -208,8 +233,8 @@ def build_app() -> Application:
 async def main():
     if not config.TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_TOKEN is not set in your .env file")
-    if not config.TELEGRAM_CHAT_ID:
-        raise ValueError("TELEGRAM_CHAT_ID is not set in your .env file")
+    if not config.TELEGRAM_CHANNEL_ID:
+        raise ValueError("TELEGRAM_CHANNEL_ID is not set in your .env file")
 
     app = build_app()
 
