@@ -11,6 +11,8 @@ are only used as a fallback if Gemini is unavailable.
 
 import json
 import logging
+import time
+import random
 from datetime import datetime, timezone
 
 import requests
@@ -35,37 +37,70 @@ gemini = genai.GenerativeModel("gemini-1.5-flash")
 # ─── Google Trends ────────────────────────────────────────────
 
 def _build_pytrends() -> TrendReq:
-    return TrendReq(hl="en-US", tz=0, timeout=(10, 25), retries=2, backoff_factor=0.5)
+    return TrendReq(
+        hl="en-US",
+        tz=0,
+        timeout=(10, 25),
+        retries=3,
+        backoff_factor=1.5,
+    )
 
 
-def _fetch_trend_score(keyword: str, pytrends: TrendReq) -> int:
+def _fetch_trend_score(keyword: str, pytrends: TrendReq, retries: int = 3) -> int:
     """
     Return a 0–100 Google Trends interest score for a keyword.
-    Falls back to 0 on any error.
+    Retries with exponential backoff on 429. Falls back to 0 on failure.
     """
-    try:
-        pytrends.build_payload([keyword], timeframe="now 1-d", geo="")
-        data = pytrends.interest_over_time()
-        if data.empty:
-            return 0
-        return int(data[keyword].iloc[-1])
-    except Exception as e:
-        log.warning(f"[trends] Trend score error for '{keyword}': {e}")
-        return 0
+    for attempt in range(retries):
+        try:
+            # Polite delay between requests to avoid rate limiting
+            time.sleep(random.uniform(2.5, 5.0))
+            pytrends.build_payload([keyword], timeframe="now 1-d", geo="")
+            data = pytrends.interest_over_time()
+            if data.empty:
+                return 0
+            return int(data[keyword].iloc[-1])
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str:
+                wait = (2 ** attempt) * 10 + random.uniform(0, 5)
+                log.warning(
+                    f"[trends] 429 rate limit on '{keyword}' "
+                    f"(attempt {attempt+1}/{retries}). Waiting {wait:.1f}s..."
+                )
+                time.sleep(wait)
+            else:
+                log.warning(f"[trends] Trend score error for '{keyword}': {e}")
+                return 0
+    log.error(f"[trends] All retries exhausted for '{keyword}' — skipping.")
+    return 0
 
 
-def _get_realtime_trending() -> list[str]:
+def _get_realtime_trending(retries: int = 3) -> list[str]:
     """
     Pull Google Trends realtime trending searches (US).
-    Returns a list of topic strings.
+    Returns a list of topic strings. Retries with backoff on 429.
     """
-    try:
-        pt = _build_pytrends()
-        df = pt.trending_searches(pn="united_states")
-        return df[0].tolist()[:10]
-    except Exception as e:
-        log.warning(f"[trends] Realtime trending fetch failed: {e}")
-        return []
+    for attempt in range(retries):
+        try:
+            time.sleep(random.uniform(1.0, 3.0))
+            pt = _build_pytrends()
+            df = pt.trending_searches(pn="united_states")
+            return df[0].tolist()[:10]
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str:
+                wait = (2 ** attempt) * 10 + random.uniform(0, 5)
+                log.warning(
+                    f"[trends] 429 on realtime fetch "
+                    f"(attempt {attempt+1}/{retries}). Waiting {wait:.1f}s..."
+                )
+                time.sleep(wait)
+            else:
+                log.warning(f"[trends] Realtime trending fetch failed: {e}")
+                return []
+    log.error("[trends] Realtime trending fetch failed after all retries.")
+    return []
 
 
 # ─── Gemini keyword generation ────────────────────────────────
@@ -119,7 +154,6 @@ Respond ONLY in this exact JSON format, no markdown, no extra text:
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(text)
 
-        # Validate structure — all three buckets must be present
         required = {"animation", "lifestyle", "general"}
         if not required.issubset(parsed.keys()):
             raise ValueError(f"Missing keyword buckets in Gemini response: {parsed.keys()}")
@@ -245,7 +279,7 @@ def get_trending_content_ideas(max_results: int = 4) -> list[dict]:
     Main trend detection pipeline:
     1. Pull Google realtime trending topics
     2. Ask Gemini to generate fresh keyword buckets (animation / lifestyle / general)
-    3. Score all keywords against Google Trends
+    3. Score all keywords against Google Trends (with polite delays + 429 backoff)
     4. Generate Gemini-powered ideas for the top hits
     Returns a list of idea dicts ready for format_content_alert().
     """
@@ -256,11 +290,11 @@ def get_trending_content_ideas(max_results: int = 4) -> list[dict]:
     # Step 1 — Google realtime trending
     realtime = _get_realtime_trending()
 
-    # Step 2 — AI-generated keyword buckets (replaces static config lists)
+    # Step 2 — AI-generated keyword buckets
     ai_keywords = _gemini_generate_keywords()
 
     # Build keyword pool: realtime first, then AI-generated buckets
-    keyword_pool: list[tuple[str, str]] = []  # (keyword, category)
+    keyword_pool: list[tuple[str, str]] = []
 
     for topic in realtime:
         keyword_pool.append((topic, "general"))
@@ -269,15 +303,17 @@ def get_trending_content_ideas(max_results: int = 4) -> list[dict]:
         for kw in keywords:
             keyword_pool.append((kw, category))
 
-    # Step 3 — Score and collect
+    # Step 3 — Score and collect (capped to limit API calls)
     scored: list[tuple[int, str, str]] = []
-    for keyword, category in keyword_pool[:20]:  # cap API calls
+    cap = 15  # Reduced from 20 to be gentler on Google's rate limits
+
+    for keyword, category in keyword_pool[:cap]:
         if keyword.lower() in seen:
             continue
         seen.add(keyword.lower())
 
         score = _fetch_trend_score(keyword, pt)
-        if score >= 50:  # Minimum interest threshold
+        if score >= 50:
             scored.append((score, keyword, category))
 
     # Sort by score descending
@@ -287,6 +323,18 @@ def get_trending_content_ideas(max_results: int = 4) -> list[dict]:
     for score, keyword, category in scored[:max_results]:
         idea = _gemini_generate_ideas(keyword, category, score)
         ideas.append(idea)
+
+    # If Google Trends returned nothing usable, generate ideas from AI keywords directly
+    if not ideas:
+        log.warning("[trends] No scored results — generating ideas from AI keywords directly.")
+        for category, keywords in ai_keywords.items():
+            if len(ideas) >= max_results:
+                break
+            for kw in keywords[:1]:
+                idea = _gemini_generate_ideas(kw, category, trend_score=0)
+                ideas.append(idea)
+                if len(ideas) >= max_results:
+                    break
 
     return ideas
 
@@ -299,7 +347,6 @@ def get_ideas_for_topic(topic: str) -> dict:
     pt    = _build_pytrends()
     score = _fetch_trend_score(topic, pt)
 
-    # Classify category from topic text
     topic_lower = topic.lower()
     if any(kw in topic_lower for kw in ["animat", "motion", "2d", "3d", "cartoon"]):
         category = "animation"
